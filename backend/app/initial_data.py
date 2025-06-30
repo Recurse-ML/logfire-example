@@ -1,11 +1,12 @@
-import logging
+import logfire
 
 from sqlmodel import Session
 
 from app.core.db import engine, init_db
+from app.core.logfire_config import configure_logfire
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure logfire
+configure_logfire()
 
 
 def init() -> None:
@@ -14,9 +15,9 @@ def init() -> None:
 
 
 def main() -> None:
-    logger.info("Creating initial data")
+    logfire.info("Creating initial data")
     init()
-    logger.info("Initial data created")
+    logfire.info("Initial data created")
 
 
 if __name__ == "__main__":

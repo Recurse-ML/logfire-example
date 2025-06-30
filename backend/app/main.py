@@ -1,18 +1,21 @@
-import sentry_sdk
+import logfire
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.core.config import settings
+from app.core.db import engine
+from app.core.logfire_config import configure_logfire
 
+# Configure Logfire once at startup
+configure_logfire()
+# Instrument SQLAlchemy after configuration
+logfire.instrument_sqlalchemy(engine=engine)
 
 def custom_generate_unique_id(route: APIRoute) -> str:
     return f"{route.tags[0]}-{route.name}"
 
-
-if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
-    sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -31,3 +34,6 @@ if settings.all_cors_origins:
     )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Instrument FastAPI after app creation
+logfire.instrument_fastapi(app, capture_headers=True)

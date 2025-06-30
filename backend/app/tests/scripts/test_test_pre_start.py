@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 from sqlmodel import select
 
-from app.tests_pre_start import init, logger
+from app.tests_pre_start import init
 
 
 def test_init_successful_connection() -> None:
@@ -14,9 +14,9 @@ def test_init_successful_connection() -> None:
 
     with (
         patch("sqlmodel.Session", return_value=session_mock),
-        patch.object(logger, "info"),
-        patch.object(logger, "error"),
-        patch.object(logger, "warn"),
+        patch("logfire.info"),
+        patch("logfire.error"),
+        patch("logfire.warning"),
     ):
         try:
             init(engine_mock)

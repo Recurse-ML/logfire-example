@@ -48,6 +48,8 @@ def test_token(current_user: CurrentUser) -> Any:
     """
     Test access token
     """
+    # test 500 response
+    raise HTTPException(status_code=500, detail="Test Error")
     return current_user
 
 
