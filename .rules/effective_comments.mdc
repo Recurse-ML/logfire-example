@@ -14,3 +14,7 @@ For more context read: https://blog.codinghorror.com/code-tells-you-how-comments
 - Keep TODO comments specific with assignees when possible
 - ALWAYS update comments when the underlying code changes
 
+# Solution
+
+Fix redundant comments by removing them completely.
+Never attempt to add additional clarification to the comments.
