@@ -1,5 +1,5 @@
 ---
-description: Effective Code Comments - Explain WHY not WHAT
+description: Effective Code Comments
 globs: "**/*.{js,ts,py,go,java,rb,cs}"
 alwaysApply: true
 ---
@@ -7,11 +7,10 @@ alwaysApply: true
 
 For more context read: https://blog.codinghorror.com/code-tells-you-how-comments-tell-you-why/
 
-- Explain WHY the code does something, not WHAT it does
-- Document complex business logic and clarify non-obvious implementations
-- Warn about gotchas and provide context for future maintainers
-- Use proper documentation comment format for functions and methods
+- NEVER write comments for code that can be understood from the code itself
+- Avoid redundant comments that restate the obvious
+- Use comments to clarify the intent behind complex logic or decisions
+- Use comments when non-obvious assumptions are made
 - Keep TODO comments specific with assignees when possible
-- Always update comments when the underlying code changes
-- Focus on business context, edge cases, and implementation decisions that aren't obvious from reading the code
+- ALWAYS update comments when the underlying code changes
 
