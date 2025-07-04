@@ -1,0 +1,17 @@
+---
+description: Don't DRY Your Code Prematurely
+globs: "**/*.{js,ts,py,go,java,rb,cs}"
+alwaysApply: false
+---
+
+Reference: https://testing.googleblog.com/2024/05/dont-dry-your-code-prematurely.html
+
+Consider carefully if code duplication is truly redundant or just superficially similar before applying DRY principles. Functions or classes may look the same but serve different contexts and business requirements that evolve differently over time. 
+
+Key principles to follow:
+- Avoid premature abstractions that couple behaviors which may need to evolve separately
+- When in doubt, keep behaviors separate until enough common patterns emerge over time that justify the coupling
+- Think about long-term evolution, not just making code shorter
+- Apply YAGNI principle - tolerate a little duplication in early development stages
+- Wait to abstract until clear patterns emerge
+
