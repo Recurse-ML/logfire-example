@@ -3,6 +3,7 @@ from typing import TypeVar, Generic, Type, Any, Dict, Optional, List, Union
 from pydantic import create_model, EmailStr
 from sqlmodel import SQLModel, Field, Relationship
 from abc import ABC, abstractmethod
+import copy
 
 # Type variables for our factory system
 T = TypeVar('T', bound=SQLModel)
@@ -41,14 +42,6 @@ class FieldMetadata:
 
 
 class ModelSchema:
-    """
-    Defines the complete schema for an entity, including all fields and relationships.
-    This serves as the single source of truth for entity definition, ensuring
-    consistency across all generated model variations.
-    
-    By centralizing entity definitions, we can ensure that changes to business
-    rules are automatically propagated to all relevant model types.
-    """
     def __init__(self, name: str, fields: Dict[str, FieldMetadata], relationships: Optional[Dict[str, Any]] = None):
         self.name = name
         self.fields = fields
@@ -56,21 +49,6 @@ class ModelSchema:
 
 
 class BaseModelFactory(Generic[T], ABC):
-    """
-    Abstract factory for generating consistent model hierarchies across different entities.
-    This factory eliminates the need to manually define repetitive model variations
-    (Base, Create, Update, UpdateMe, Table, Public, ListPublic) for each entity.
-    
-    The factory ensures consistency by:
-    - Automatically generating appropriate field configurations for each model type
-    - Applying consistent validation rules across all entities
-    - Handling relationships uniformly across the application
-    - Providing hooks for domain-specific customization
-    
-    This approach significantly reduces boilerplate code and ensures that new
-    entities can be quickly added with full CRUD support by simply defining
-    their schema once.
-    """
     
     def __init__(self, schema: ModelSchema):
         self.schema = schema
@@ -85,59 +63,38 @@ class BaseModelFactory(Generic[T], ABC):
         
     @abstractmethod
     def get_domain_specific_validations(self) -> Dict[str, Any]:
-        """
-        Returns domain-specific validation functions for this entity type.
-        This allows each entity to implement custom validation logic while
-        maintaining the consistent factory interface.
-        
-        Returns:
-            Dictionary mapping validation names to validation functions
-        """
         pass
     
     @abstractmethod
     def get_business_rules(self) -> Dict[str, Any]:
-        """
-        Returns business-specific rules and transformations for this entity.
-        This provides a clean extension point for domain-specific logic
-        without breaking the factory pattern.
-        
-        Returns:
-            Dictionary mapping rule names to rule functions
-        """
         pass
     
     def _create_field(self, field_name: str, metadata: FieldMetadata, for_model_type: str) -> Any:
-        """
-        Generates appropriate field configurations based on the target model type.
-        This ensures consistent field behavior across different model variations
-        while adapting to specific requirements of each model type.
-        
-        Args:
-            field_name: Name of the field
-            metadata: Field metadata configuration
-            for_model_type: Target model type (base, create, update, etc.)
-            
-        Returns:
-            Configured Field instance or None if field should be excluded
-        """
         field_kwargs = {}
+        field_type = metadata.field_type
         
         # Configure fields based on target model type
-        if for_model_type == 'create':
-            # Create models typically require all non-nullable fields
+        if for_model_type == 'base':
+            # Base models exclude password fields and ID
+            if field_name in ['password', 'hashed_password', 'id']:
+                return None
+        elif for_model_type == 'create':
+            # Create models exclude hashed_password, id, and owner_id (set by backend)
+            if field_name in ['hashed_password', 'id', 'owner_id']:
+                return None
             if metadata.nullable and field_name != 'id':
                 field_kwargs['default'] = metadata.default
         elif for_model_type == 'update':
             # Update models make most fields optional to support partial updates
-            if field_name != 'id':
-                metadata.field_type = Optional[metadata.field_type]
-                field_kwargs['default'] = None
+            if field_name in ['id', 'hashed_password']:
+                return None
+            field_type = Optional[metadata.field_type]
+            field_kwargs['default'] = None
         elif for_model_type == 'update_me':
             # UpdateMe models restrict certain fields for security
-            if field_name in ['password', 'is_superuser']:
-                return None  # Users shouldn't be able to update these directly
-            metadata.field_type = Optional[metadata.field_type]
+            if field_name in ['password', 'is_superuser', 'hashed_password', 'id']:
+                return None
+            field_type = Optional[metadata.field_type]
             field_kwargs['default'] = None
         elif for_model_type == 'table':
             # Table models need database-specific configurations
@@ -148,6 +105,7 @@ class BaseModelFactory(Generic[T], ABC):
                 })
             if metadata.foreign_key:
                 field_kwargs['foreign_key'] = metadata.foreign_key
+                field_kwargs['nullable'] = not metadata.nullable
         elif for_model_type == 'public':
             # Public models exclude sensitive fields from API responses
             if field_name in ['hashed_password', 'password']:
@@ -167,25 +125,16 @@ class BaseModelFactory(Generic[T], ABC):
         if field_name == 'email' and for_model_type in ['create', 'update']:
             field_kwargs['max_length'] = 255
             
-        return Field(**field_kwargs) if field_kwargs else Field()
+        return (field_type, Field(**field_kwargs) if field_kwargs else Field())
     
     def _generate_model_fields(self, for_model_type: str) -> Dict[str, Any]:
-        """
-        Generates field definitions for a specific model type by applying
-        appropriate transformations to the base field metadata.
-        
-        Args:
-            for_model_type: The type of model being generated
-            
-        Returns:
-            Dictionary of field names to (type, Field) tuples
-        """
         fields = {}
         
         for field_name, metadata in self.schema.fields.items():
-            field_def = self._create_field(field_name, metadata, for_model_type)
-            if field_def is not None:
-                fields[field_name] = (metadata.field_type, field_def)
+            field_result = self._create_field(field_name, metadata, for_model_type)
+            if field_result is not None:
+                field_type, field_def = field_result
+                fields[field_name] = (field_type, field_def)
                 
         # Add relationships for table models
         if for_model_type == 'table':
@@ -195,10 +144,6 @@ class BaseModelFactory(Generic[T], ABC):
         return fields
     
     def get_base_model(self) -> Type[SQLModel]:
-        """
-        Generates the base model class containing shared fields and properties.
-        Uses lazy loading to avoid unnecessary model generation.
-        """
         if self._base_model is None:
             fields = self._generate_model_fields('base')
             self._base_model = create_model(
@@ -209,42 +154,28 @@ class BaseModelFactory(Generic[T], ABC):
         return self._base_model
     
     def get_create_model(self) -> Type[SQLModel]:
-        """
-        Generates the create model class for API input validation.
-        Inherits from base model and adds create-specific field configurations.
-        """
         if self._create_model is None:
-            base_model = self.get_base_model()
-            fields = self._generate_model_fields('create')
+            create_fields = self._generate_model_fields('create')
             
             self._create_model = create_model(
                 f"{self.schema.name}Create",
-                __base__=base_model,
-                **fields
+                __base__=SQLModel,
+                **create_fields
             )
         return self._create_model
     
     def get_update_model(self) -> Type[SQLModel]:
-        """
-        Generates the update model class for API input validation.
-        Makes fields optional to support partial updates.
-        """
         if self._update_model is None:
-            base_model = self.get_base_model()
-            fields = self._generate_model_fields('update')
+            update_fields = self._generate_model_fields('update')
             
             self._update_model = create_model(
                 f"{self.schema.name}Update",
-                __base__=base_model,
-                **fields
+                __base__=SQLModel,
+                **update_fields
             )
         return self._update_model
     
     def get_update_me_model(self) -> Type[SQLModel]:
-        """
-        Generates the self-update model class for user profile updates.
-        Restricts sensitive fields that users shouldn't modify directly.
-        """
         if self._update_me_model is None:
             fields = self._generate_model_fields('update_me')
             
@@ -256,46 +187,38 @@ class BaseModelFactory(Generic[T], ABC):
         return self._update_me_model
     
     def get_table_model(self) -> Type[SQLModel]:
-        """
-        Generates the database table model class with proper relationships
-        and database-specific configurations.
-        """
         if self._table_model is None:
             base_model = self.get_base_model()
-            fields = self._generate_model_fields('table')
+            table_fields = self._generate_model_fields('table')
+            
+            # For table models, we need to exclude base fields but keep table-specific ones
+            base_fields = set(base_model.model_fields.keys()) if hasattr(base_model, 'model_fields') else set()
+            filtered_fields = {k: v for k, v in table_fields.items() 
+                             if k not in base_fields or k in ['id', 'hashed_password']}
             
             self._table_model = create_model(
                 f"{self.schema.name}",
-                __base__=base_model,
+                __base__=(base_model,),
                 __table__=True,
-                **fields
+                **filtered_fields
             )
         return self._table_model
     
     def get_public_model(self) -> Type[SQLModel]:
-        """
-        Generates the public model class for API responses.
-        Excludes sensitive fields and includes required ID field.
-        """
         if self._public_model is None:
-            base_model = self.get_base_model()
-            fields = self._generate_model_fields('public')
+            public_fields = self._generate_model_fields('public')
             
             # Ensure public models always include ID
-            fields['id'] = (uuid.UUID, Field())
+            public_fields['id'] = (uuid.UUID, Field())
             
             self._public_model = create_model(
                 f"{self.schema.name}Public",
-                __base__=base_model,
-                **fields
+                __base__=SQLModel,
+                **public_fields
             )
         return self._public_model
     
     def get_list_public_model(self) -> Type[SQLModel]:
-        """
-        Generates the list model class for paginated API responses.
-        Provides consistent structure for all list endpoints.
-        """
         if self._list_public_model is None:
             public_model = self.get_public_model()
             
@@ -308,10 +231,6 @@ class BaseModelFactory(Generic[T], ABC):
         return self._list_public_model
     
     def get_all_models(self) -> Dict[str, Type[SQLModel]]:
-        """
-        Returns all generated model types for this entity.
-        Convenient method for bulk model access and registration.
-        """
         return {
             'base': self.get_base_model(),
             'create': self.get_create_model(),
@@ -324,11 +243,6 @@ class BaseModelFactory(Generic[T], ABC):
 
 
 class UserModelFactory(BaseModelFactory):
-    """
-    Factory for generating all User-related model classes.
-    Implements user-specific validation and business rules while
-    leveraging the common factory infrastructure.
-    """
     
     def __init__(self):
         user_schema = ModelSchema(
@@ -358,6 +272,7 @@ class UserModelFactory(BaseModelFactory):
                     field_type=Optional[str],
                     default=None,
                     max_length=255,
+                    nullable=True,
                     description="User's full name"
                 ),
                 'password': FieldMetadata(
@@ -375,8 +290,7 @@ class UserModelFactory(BaseModelFactory):
                 ),
                 'id': FieldMetadata(
                     field_type=uuid.UUID,
-                    primary_key=True,
-                    default_factory=uuid.uuid4
+                    primary_key=True
                 )
             },
             relationships={
@@ -389,9 +303,6 @@ class UserModelFactory(BaseModelFactory):
         super().__init__(user_schema)
     
     def get_domain_specific_validations(self) -> Dict[str, Any]:
-        """
-        User-specific validation functions for email, password, and privileges.
-        """
         return {
             'email_domain_validation': self._validate_email_domain,
             'password_complexity': self._validate_password_complexity,
@@ -399,9 +310,6 @@ class UserModelFactory(BaseModelFactory):
         }
     
     def get_business_rules(self) -> Dict[str, Any]:
-        """
-        User-specific business rules for data transformation and validation.
-        """
         return {
             'password_hashing': self._hash_password_before_store,
             'email_normalization': self._normalize_email,
@@ -409,40 +317,25 @@ class UserModelFactory(BaseModelFactory):
         }
     
     def _validate_email_domain(self, email: str) -> bool:
-        """Validates email domain against allowed domains"""
-        # Implementation for domain validation
         return True
     
     def _validate_password_complexity(self, password: str) -> bool:
-        """Validates password meets complexity requirements"""
-        # Implementation for password complexity
         return True
     
     def _validate_admin_privileges(self, user_data: dict) -> bool:
-        """Validates admin privilege changes"""
-        # Implementation for privilege validation
         return True
     
     def _hash_password_before_store(self, password: str) -> str:
-        """Hashes password before database storage"""
-        # Implementation for password hashing
         return password
     
     def _normalize_email(self, email: str) -> str:
-        """Normalizes email format"""
         return email.lower().strip()
     
     def _check_superuser_changes(self, changes: dict) -> bool:
-        """Validates superuser permission changes"""
-        # Implementation for superuser validation
         return True
 
 
 class ItemModelFactory(BaseModelFactory):
-    """
-    Factory for generating all Item-related model classes.
-    Implements item-specific validation and business rules.
-    """
     
     def __init__(self):
         item_schema = ModelSchema(
@@ -460,6 +353,7 @@ class ItemModelFactory(BaseModelFactory):
                     field_type=Optional[str],
                     default=None,
                     max_length=255,
+                    nullable=True,
                     description="Item description",
                     business_constraints={'content_filter': True, 'markdown_allowed': True}
                 ),
@@ -471,8 +365,7 @@ class ItemModelFactory(BaseModelFactory):
                 ),
                 'id': FieldMetadata(
                     field_type=uuid.UUID,
-                    primary_key=True,
-                    default_factory=uuid.uuid4
+                    primary_key=True
                 )
             },
             relationships={
@@ -485,7 +378,6 @@ class ItemModelFactory(BaseModelFactory):
         super().__init__(item_schema)
     
     def get_domain_specific_validations(self) -> Dict[str, Any]:
-        """Item-specific validation functions"""
         return {
             'title_content_check': self._check_title_content,
             'description_markdown_validation': self._validate_markdown,
@@ -493,7 +385,6 @@ class ItemModelFactory(BaseModelFactory):
         }
     
     def get_business_rules(self) -> Dict[str, Any]:
-        """Item-specific business rules"""
         return {
             'auto_slug_generation': self._generate_slug_from_title,
             'ownership_assignment': self._assign_owner,
@@ -501,88 +392,48 @@ class ItemModelFactory(BaseModelFactory):
         }
     
     def _check_title_content(self, title: str) -> bool:
-        """Validates item title content"""
         return True
     
     def _validate_markdown(self, description: str) -> bool:
-        """Validates markdown in description"""
         return True
     
     def _validate_ownership(self, item_data: dict, current_user: Any) -> bool:
-        """Validates item ownership"""
         return True
     
     def _generate_slug_from_title(self, title: str) -> str:
-        """Generates URL-friendly slug from title"""
         return title.lower().replace(' ', '-')
     
     def _assign_owner(self, item_data: dict, current_user: Any) -> dict:
-        """Assigns ownership to item"""
         return item_data
     
     def _check_duplicate_titles(self, title: str, user_id: uuid.UUID) -> bool:
-        """Checks for duplicate titles within user's items"""
         return True
 
 
 class ModelFactoryRegistry:
-    """
-    Central registry for managing all model factories.
-    Provides convenient access to all entity models through a unified interface.
-    
-    This registry pattern allows for dynamic model loading and ensures
-    consistent model generation across the application.
-    """
     
     _factories: Dict[str, BaseModelFactory] = {}
     
     @classmethod
     def register(cls, name: str, factory: BaseModelFactory):
-        """Register a factory for an entity type"""
         cls._factories[name] = factory
     
     @classmethod
     def get_factory(cls, name: str) -> BaseModelFactory:
-        """Get the factory for a specific entity type"""
         if name not in cls._factories:
             raise ValueError(f"No factory registered for {name}")
         return cls._factories[name]
     
     @classmethod
     def get_all_models_for(cls, entity_name: str) -> Dict[str, Type[SQLModel]]:
-        """Get all model types for a specific entity"""
         factory = cls.get_factory(entity_name)
         return factory.get_all_models()
 
 
 def setup_model_factories():
-    """
-    Initialize and register all model factories.
-    This should be called during application startup to ensure
-    all models are available for import and use.
-    """
     # Register entity factories
     ModelFactoryRegistry.register("User", UserModelFactory())
     ModelFactoryRegistry.register("Item", ItemModelFactory())
-    
-    # Generate all models for easy import
-    user_models = ModelFactoryRegistry.get_all_models_for("User")
-    item_models = ModelFactoryRegistry.get_all_models_for("Item")
-    
-    # Make models available in global namespace for easy import
-    globals().update({
-        'User': user_models['table'],
-        'UserCreate': user_models['create'],
-        'UserUpdate': user_models['update'],
-        'UserUpdateMe': user_models['update_me'],
-        'UserPublic': user_models['public'],
-        'UsersPublic': user_models['list_public'],
-        'Item': item_models['table'],
-        'ItemCreate': item_models['create'],
-        'ItemUpdate': item_models['update'],
-        'ItemPublic': item_models['public'],
-        'ItemsPublic': item_models['list_public'],
-    })
 
 
 # Initialize factories on module import
