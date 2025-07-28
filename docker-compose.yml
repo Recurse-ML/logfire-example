@@ -107,6 +107,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN}
+      - GIT_COMMIT=${GIT_COMMIT}
+      - GIT_REPO_URL=${GIT_REPO_URL}
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
@@ -116,6 +118,7 @@ services:
 
     build:
       context: ./backend
+
     labels:
       - traefik.enable=true
       - traefik.docker.network=traefik-public
@@ -133,7 +136,8 @@ services:
 
       # Enable redirection for HTTP and HTTPS
       - traefik.http.routers.${STACK_NAME?Variable not set}-backend-http.middlewares=https-redirect
-
+    ports:
+      - "8000:8000"
   frontend:
     image: '${DOCKER_IMAGE_FRONTEND?Variable not set}:${TAG-latest}'
     restart: always
