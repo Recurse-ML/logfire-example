@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/usr/bin/env bash
 
 # TODO: verify that there are no unpushed changes
 #
